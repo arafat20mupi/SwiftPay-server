@@ -30,6 +30,7 @@ const client = new MongoClient(uri, {
 });
 
 const userCollection = client.db('SwiftPay').collection('user');
+const requstedCollection = client.db('SwiftPay').collection('requsted');
 
 async function run() {
   try {
@@ -54,7 +55,36 @@ async function run() {
         res.status(500).json({ message: 'Failed to register user' });
       }
     });
+    app.post('/requsted', async (req, res) => {
+      const userDetails = req.body; // Assuming JSON body with user details
+      try {
+        // Insert user details into MongoDB
+        const result = await requstedCollection.insertOne(userDetails);
+        console.log('User inserted:', result);
+        res.status(200).json({ message: 'User registered successfully' });
+      } catch (error) {
+        console.error('Error inserting user:', error);
+        res.status(500).json({ message: 'Failed to register user' });
+      }
+    });
 
+    app.get('/user/:email', async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        email: email
+      }
+      const role = await userCollection.findOne(query)
+      console.log(role);
+      let admin = false
+      let user = false
+      let agent = false
+      if (role) {
+        admin = role?.role === 'admin'
+        user = role?.role === 'user'
+        agent = role?.role === 'agent'
+      }
+      res.send({ admin, user , agent })
+    })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
