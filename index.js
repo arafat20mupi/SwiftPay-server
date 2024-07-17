@@ -30,7 +30,7 @@ const client = new MongoClient(uri, {
 });
 
 const userCollection = client.db('SwiftPay').collection('user');
-const requstedCollection = client.db('SwiftPay').collection('requsted');
+const requestedCollection = client.db('SwiftPay').collection('requsted');
 
 async function run() {
   try {
@@ -41,6 +41,21 @@ async function run() {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
       res.send(result);
+    });
+
+    app.get('/requested', async (req, res) => {
+      const cursor = requestedCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+    app.get('/requested/user', async (req, res) => {
+      try {
+        const users = await requestedCollection.find({ role: 'user' }).toArray();
+        res.status(200).json(users);
+      } catch (error) {
+        console.error('Error fetching user requests:', error);
+        res.status(500).json({ message: 'Failed to fetch user requests' });
+      }
     });
 
     app.post('/user', async (req, res) => {
@@ -55,11 +70,11 @@ async function run() {
         res.status(500).json({ message: 'Failed to register user' });
       }
     });
-    app.post('/requsted', async (req, res) => {
+    app.post('/requested', async (req, res) => {
       const userDetails = req.body; // Assuming JSON body with user details
       try {
         // Insert user details into MongoDB
-        const result = await requstedCollection.insertOne(userDetails);
+        const result = await requestedCollection.insertOne(userDetails);
         console.log('User inserted:', result);
         res.status(200).json({ message: 'User registered successfully' });
       } catch (error) {
@@ -68,6 +83,32 @@ async function run() {
       }
     });
 
+
+    app.put('/requested/:id', async (req, res) => {
+      const id = req.params.id;
+      const { balance } = req.body;
+      
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: 'Invalid ID format' });
+      }
+    
+      try {
+        const result = await requestedCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { balance: balance } }
+        );
+        
+        if (result.modifiedCount === 1) {
+          res.status(200).json({ message: 'Balance updated successfully' });
+        } else {
+          res.status(404).json({ message: 'User not found' });
+        }
+      } catch (error) {
+        console.error('Error updating balance:', error);
+        res.status(500).json({ message: 'Failed to update balance' });
+      }
+    });  
+      
     app.get('/user/:email', async (req, res) => {
       const email = req.params.email;
       const query = {
@@ -83,7 +124,7 @@ async function run() {
         user = role?.role === 'user'
         agent = role?.role === 'agent'
       }
-      res.send({ admin, user , agent })
+      res.send({ admin, user, agent })
     })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
