@@ -4,7 +4,6 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
-
 const app = express();
 const port = process.env.PORT || 5000;
 app.use(cookieParser());
@@ -42,6 +41,33 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
+    app.get('/user/:email', async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        email: email
+      }
+      const role = await userCollection.findOne(query)
+      let admin = false
+      let user = false
+      let agent = false
+      if (role) {
+        admin = role?.role === 'admin'
+        user = role?.role === 'user'
+        agent = role?.role === 'agent'
+      }
+      res.send({ admin, user, agent })
+    })
+    app.post('/user', async (req, res) => {
+      const userDetails = req.body;
+      try {
+        // Insert user details into MongoDB
+        const result = await userCollection.insertOne(userDetails);
+        res.status(200).json({ message: 'User registered successfully' });
+      } catch (error) {
+        console.error('Error inserting user:', error);
+        res.status(500).json({ message: 'Failed to register user' });
+      }
+    });
 
     app.get('/requested', async (req, res) => {
       const cursor = requestedCollection.find();
@@ -53,79 +79,78 @@ async function run() {
         const users = await requestedCollection.find({ role: 'user' }).toArray();
         res.status(200).json(users);
       } catch (error) {
-        console.error('Error fetching user requests:', error);
         res.status(500).json({ message: 'Failed to fetch user requests' });
       }
     });
 
-    app.post('/user', async (req, res) => {
-      const userDetails = req.body; // Assuming JSON body with user details
-      try {
-        // Insert user details into MongoDB
-        const result = await userCollection.insertOne(userDetails);
-        console.log('User inserted:', result);
-        res.status(200).json({ message: 'User registered successfully' });
-      } catch (error) {
-        console.error('Error inserting user:', error);
-        res.status(500).json({ message: 'Failed to register user' });
-      }
-    });
     app.post('/requested', async (req, res) => {
       const userDetails = req.body; // Assuming JSON body with user details
       try {
         // Insert user details into MongoDB
         const result = await requestedCollection.insertOne(userDetails);
-        console.log('User inserted:', result);
         res.status(200).json({ message: 'User registered successfully' });
       } catch (error) {
-        console.error('Error inserting user:', error);
         res.status(500).json({ message: 'Failed to register user' });
       }
     });
 
-
-    app.put('/requested/:id', async (req, res) => {
-      const id = req.params.id;
-      const { balance } = req.body;
-      
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: 'Invalid ID format' });
-      }
-    
+    app.get('/requested/user', async (req, res) => {
       try {
-        const result = await requestedCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { balance: balance } }
-        );
-        
+        const users = await requestedCollection.find({ role: 'user' }).toArray();
+        res.status(200).json(users);
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch users' });
+      }
+    });
+
+    app.get('/requested/agents', async (req, res) => {
+      try {
+        const agents = await requestedCollection.find({ role: 'agent' }).toArray();
+        res.status(200).json(agents);
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch agents' });
+      }
+    });
+
+    //  '/requested/:id' &  balance: 40 &  stutas : active
+    app.put('/requested/:id', async (req, res) => {
+      const requestId = req.params.id;
+      const { balance, status } = req.body;
+      try {
+        const filter = { _id: new ObjectId(requestId) };
+        const updateDoc = {
+          $set: {
+            balance: balance,
+            status: status,
+          },
+        };
+        const result = await requestedCollection.updateOne(filter, updateDoc);
         if (result.modifiedCount === 1) {
-          res.status(200).json({ message: 'Balance updated successfully' });
+          res.status(200).json({ message: 'User request updated successfully' });
+        } else {
+          res.status(404).json({ message: 'User request not found' });
+        }
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to update user request' });
+      }
+    });
+    app.get('/requested/:id', async (req, res) => {
+      const id = req.params.id;
+      try {
+        const query = { _id: new ObjectId(id) };
+        const user = await requestedCollection.findOne(query);
+
+        if (user) {
+          res.status(200).json(user);
         } else {
           res.status(404).json({ message: 'User not found' });
         }
       } catch (error) {
-        console.error('Error updating balance:', error);
-        res.status(500).json({ message: 'Failed to update balance' });
+        console.error(error);
+        res.status(500).json({ message: 'Internal server error' });
       }
-    });  
-      
-    app.get('/user/:email', async (req, res) => {
-      const email = req.params.email;
-      const query = {
-        email: email
-      }
-      const role = await userCollection.findOne(query)
-      console.log(role);
-      let admin = false
-      let user = false
-      let agent = false
-      if (role) {
-        admin = role?.role === 'admin'
-        user = role?.role === 'user'
-        agent = role?.role === 'agent'
-      }
-      res.send({ admin, user, agent })
-    })
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
