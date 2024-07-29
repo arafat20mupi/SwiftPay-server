@@ -2,18 +2,18 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
+const bcrypt = require('bcrypt');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 5000;
 app.use(cookieParser());
 app.use(cors({
-  origin: [
-    "http://localhost:5173",
-  ],
+  origin: "http://localhost:5173",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   credentials: true,
 }));
+
 app.use(express.json());
 
 // Set up MongoDB connection
@@ -30,12 +30,10 @@ const client = new MongoClient(uri, {
 
 const userCollection = client.db('SwiftPay').collection('user');
 const requestedCollection = client.db('SwiftPay').collection('requsted');
-
 async function run() {
   try {
     // Connect the client to the server
     await client.connect();
-
     app.get('/user', async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
@@ -68,7 +66,7 @@ async function run() {
         res.status(500).json({ message: 'Failed to register user' });
       }
     });
-
+    // admin page start
     app.get('/requested', async (req, res) => {
       const cursor = requestedCollection.find();
       const result = await cursor.toArray();
@@ -111,8 +109,6 @@ async function run() {
         res.status(500).json({ message: 'Failed to fetch agents' });
       }
     });
-
-    //  '/requested/:id' &  balance: 40 &  stutas : active
     app.put('/requested/:id', async (req, res) => {
       const requestId = req.params.id;
       const { balance, status } = req.body;
@@ -150,6 +146,58 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
+
+    // admin page end
+
+    // User page and role start
+
+    app.post('/api/sendMoney', async (req, res) => {
+      const { sender, recipient, amount, pin } = req.body;
+
+      try {
+        const senderUser = await userCollection.findOne({ email: sender });
+        const recipientUser = await userCollection.findOne({ email: recipient });
+
+        if (!senderUser || !recipientUser) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (senderUser.password !== pin) { // Validate PIN
+          return res.status(403).json({ message: 'Invalid PIN' });
+        }
+
+        const amountNum = parseFloat(amount);
+
+        if (amountNum < 50) { // Minimum transaction amount
+          return res.status(400).json({ message: 'Minimum transaction amount is 50 Taka' });
+        }
+
+        if (senderUser.balance < amountNum) { // Check balance
+          return res.status(400).json({ message: 'Insufficient balance' });
+        }
+
+        let fee = 0;
+        if (amountNum > 100) {
+          fee = 5; // Transaction fee
+        }
+
+        await userCollection.updateOne(
+          { email: sender },
+          { $inc: { balance: -(amountNum + fee) } }
+        );
+
+        await userCollection.updateOne(
+          { email: recipient },
+          { $inc: { balance: amountNum } }
+        );
+
+        res.status(200).json({ message: 'Money sent successfully' });
+      } catch (error) {
+        console.error('Error sending money:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
