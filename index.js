@@ -1,11 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+
 require('dotenv').config();
 const app = express();
+
 const port = process.env.PORT || 5000;
 app.use(cookieParser());
 app.use(cors({
@@ -29,36 +32,58 @@ const client = new MongoClient(uri, {
 });
 
 const userCollection = client.db('SwiftPay').collection('user');
-const requestedCollection = client.db('SwiftPay').collection('requsted');
+const requestedCollection = client.db('SwiftPay').collection('requested');
+
 async function run() {
   try {
     // Connect the client to the server
-    await client.connect();
+    // await client.connect();
+    const authenticate = async (req, res, next) => {
+      const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+
+      if (!token) {
+        return res.status(401).json({ message: 'Access Denied: No Token Provided!' });
+      }
+
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await userCollection.findOne({ email: decoded.email });
+
+        if (!user) {
+          return res.status(401).json({ message: 'Access Denied: User Not Found!' });
+        }
+
+        req.user = user;
+        next();
+      } catch (error) {
+        console.error('Authentication Error:', error);
+        res.status(400).json({ message: 'Invalid Token' });
+      }
+    };
+
     app.get('/user', async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
+
     app.get('/user/:email', async (req, res) => {
       const email = req.params.email;
-      const query = {
-        email: email
-      }
-      const role = await userCollection.findOne(query)
-      let admin = false
-      let user = false
-      let agent = false
+      const query = { email: email };
+      const role = await userCollection.findOne(query);
+      let admin = false, user = false, agent = false;
+
       if (role) {
-        admin = role?.role === 'admin'
-        user = role?.role === 'user'
-        agent = role?.role === 'agent'
+        admin = role.role === 'admin';
+        user = role.role === 'user';
+        agent = role.role === 'agent';
       }
-      res.send({ admin, user, agent })
-    })
+      res.send({ admin, user, agent });
+    });
+
     app.post('/user', async (req, res) => {
       const userDetails = req.body;
       try {
-        // Insert user details into MongoDB
         const result = await userCollection.insertOne(userDetails);
         res.status(200).json({ message: 'User registered successfully' });
       } catch (error) {
@@ -66,12 +91,14 @@ async function run() {
         res.status(500).json({ message: 'Failed to register user' });
       }
     });
-    // admin page start
+
+    // Admin page routes
     app.get('/requested', async (req, res) => {
       const cursor = requestedCollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
+
     app.get('/requested/user', async (req, res) => {
       try {
         const users = await requestedCollection.find({ role: 'user' }).toArray();
@@ -82,22 +109,12 @@ async function run() {
     });
 
     app.post('/requested', async (req, res) => {
-      const userDetails = req.body; // Assuming JSON body with user details
+      const userDetails = req.body;
       try {
-        // Insert user details into MongoDB
         const result = await requestedCollection.insertOne(userDetails);
         res.status(200).json({ message: 'User registered successfully' });
       } catch (error) {
         res.status(500).json({ message: 'Failed to register user' });
-      }
-    });
-
-    app.get('/requested/user', async (req, res) => {
-      try {
-        const users = await requestedCollection.find({ role: 'user' }).toArray();
-        res.status(200).json(users);
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to fetch users' });
       }
     });
 
@@ -109,6 +126,7 @@ async function run() {
         res.status(500).json({ message: 'Failed to fetch agents' });
       }
     });
+
     app.put('/requested/:id', async (req, res) => {
       const requestId = req.params.id;
       const { balance, status } = req.body;
@@ -130,6 +148,7 @@ async function run() {
         res.status(500).json({ message: 'Failed to update user request' });
       }
     });
+
     app.get('/requested/:id', async (req, res) => {
       const id = req.params.id;
       try {
@@ -147,10 +166,7 @@ async function run() {
       }
     });
 
-    // admin page end
-
-    // User page and role start
-
+    // User page routes
     app.post('/api/sendMoney', async (req, res) => {
       const { sender, recipient, amount, pin } = req.body;
 
@@ -197,7 +213,53 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
+    
+    app.post('/api/cashOut', async (req, res) => {
+      const { agent, amount, pin ,userEmail } = req.body;
 
+      console.log('User email:', userEmail);
+      console.log('Agent:', agent);
+      console.log('Amount:', amount);
+      console.log('PIN:', pin);
+
+      try {
+        const userAccount = await userCollection.findOne({ email: userEmail });
+        const agentAccount = await userCollection.findOne({ email: agent });
+
+        if (!userAccount || !agentAccount) {
+          return res.status(404).json({ message: 'User or agent not found' });
+        }
+
+          if (userAccount.password !== pin) { // Validate PIN
+            return res.status(403).json({ message: 'Invalid PIN' });
+          }
+  
+
+        const amountNum = parseFloat(amount);
+        const fee = amountNum * 0.015;
+        const totalDeducted = amountNum + fee;
+
+        if (userAccount.balance < totalDeducted) {
+          return res.status(400).json({ message: 'Insufficient balance' });
+        }
+
+        // Update balances
+        await userCollection.updateOne(
+          { email: userEmail },
+          { $inc: { balance: -totalDeducted } }
+        );
+
+        await userCollection.updateOne(
+          { email: agent },
+          { $inc: { balance: amountNum + fee } }
+        );
+
+        res.status(200).json({ message: 'Cash out successful' });
+      } catch (error) {
+        console.error('Error cashing out:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
