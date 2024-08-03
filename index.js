@@ -33,33 +33,12 @@ const client = new MongoClient(uri, {
 
 const userCollection = client.db('SwiftPay').collection('user');
 const requestedCollection = client.db('SwiftPay').collection('requested');
-
+const transactionsCollection = client.db('SwiftPay').collection('transactions');
 async function run() {
   try {
     // Connect the client to the server
     // await client.connect();
-    const authenticate = async (req, res, next) => {
-      const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
 
-      if (!token) {
-        return res.status(401).json({ message: 'Access Denied: No Token Provided!' });
-      }
-
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await userCollection.findOne({ email: decoded.email });
-
-        if (!user) {
-          return res.status(401).json({ message: 'Access Denied: User Not Found!' });
-        }
-
-        req.user = user;
-        next();
-      } catch (error) {
-        console.error('Authentication Error:', error);
-        res.status(400).json({ message: 'Invalid Token' });
-      }
-    };
 
     app.get('/user', async (req, res) => {
       const cursor = userCollection.find();
@@ -196,6 +175,18 @@ async function run() {
         if (amountNum > 100) {
           fee = 5; // Transaction fee
         }
+        // Log transaction
+        const transaction = {
+          email: sender,
+          date: new Date(),
+          amount: amountNum,
+          type: 'transfer',
+          description: `Sent ${amountNum} Taka to ${recipient}`,
+          sender: sender,
+          recipient: recipient,
+        };
+
+        await transactionsCollection.insertOne(transaction);
 
         await userCollection.updateOne(
           { email: sender },
@@ -242,6 +233,19 @@ async function run() {
         if (userAccount.balance < totalDeducted) {
           return res.status(400).json({ message: 'Insufficient balance' });
         }
+        // Log transaction
+        const transaction = {
+          email: userEmail,
+          date: new Date(),
+          amount: amountNum,
+          type: 'cash-out',
+          description: `Cashed out ${amountNum} Taka through agent ${agent}`,
+          sender: userEmail,
+          recipient: agent,
+        };
+
+        await transactionsCollection.insertOne(transaction);
+
 
         // Update balances
         await userCollection.updateOne(
@@ -284,6 +288,133 @@ async function run() {
       }
     });
 
+    // Endpoint for requesting cash-in
+    app.post('/api/requestCashIn', async (req, res) => {
+      const { userEmail, agentEmail, amount } = req.body;
+
+      try {
+        // Validate amount
+        const amountNum = parseFloat(amount);
+        if (isNaN(amountNum) || amountNum <= 0) {
+          return res.status(400).json({ message: 'Invalid amount' });
+        }
+
+        // Find user and agent
+        const user = await userCollection.findOne({ email: userEmail });
+        const agent = await userCollection.findOne({ email: agentEmail });
+
+        if (!user || !agent) {
+          return res.status(404).json({ message: 'User or agent not found' });
+        }
+
+        // Create request in the requested collection
+        const request = {
+          userEmail,
+          agentEmail,
+          amount,
+          status: 'pending' // Default status
+        };
+
+        // Add request to the collection
+        await requestedCollection.insertOne(request);
+
+        res.status(200).json({ message: 'Cash-in request sent successfully' });
+      } catch (error) {
+        console.error('Error processing cash-in request:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+    app.get('/api/requestCashIn', async (req, res) => {
+      try {
+        // Fetch all cash-in requests
+        const requests = await requestedCollection.find().toArray();
+
+        // Respond with the fetched data
+        res.status(200).json(requests);
+      } catch (error) {
+        console.error('Error fetching cash-in requests:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+
+    // Endpoint for agents to approve cash-in requests
+    app.put('/api/approveCashIn/:id', async (req, res) => {
+      const requestId = req.params.id;
+      const { agentEmail } = req.body;
+
+      try {
+        // Find the request
+        const request = await requestedCollection.findOne({ _id: new ObjectId(requestId) });
+
+        if (!request || request.agentEmail !== agentEmail || request.status !== 'pending') {
+          return res.status(404).json({ message: 'Request not found or already processed' });
+        }
+
+        const user = await userCollection.findOne({ email: request.userEmail });
+        const agent = await userCollection.findOne({ email: agentEmail });
+
+        if (!user || !agent) {
+          return res.status(404).json({ message: 'User or agent not found' });
+        }
+
+        const amount = parseFloat(request.amount);
+
+        if (agent.balance < amount) {
+          return res.status(400).json({ message: 'Insufficient balance in agent account' });
+        }
+
+        // Update balances
+        await userCollection.updateOne(
+          { email: request.userEmail },
+          { $inc: { balance: amount } }
+        );
+
+        await userCollection.updateOne(
+          { email: agentEmail },
+          { $inc: { balance: -amount } }
+        );
+
+        // Update request status
+        await requestedCollection.updateOne(
+          { _id: new ObjectId(requestId) },
+          { $set: { status: 'approved' } }
+        );
+        const transaction = {
+          email: request.userEmail,
+          date: new Date(),
+          amount: parseFloat(request.amount),
+          type: 'cash-in',
+          description: `Cash-in request of ${amount} Taka approved`,
+          sender: agentEmail,
+          recipient: request.userEmail,
+        };
+        await transactionsCollection.insertOne(transaction);
+        res.status(200).json({ message: 'Cash-in request approved' });
+      } catch (error) {
+        console.error('Error approving cash-in:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+    // Backend: Fetch last 10 transactions for a user
+    app.get('/api/transactions/:email', async (req, res) => {
+      const { email } = req.params;
+
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: 'Invalid email format' });
+      }
+
+      try {
+        // Find the last 10 transactions for the user
+        const transactions = await transactionsCollection.find({ email }).sort({ date: -1 }).limit(10).toArray();
+
+        res.status(200).json(transactions);
+      } catch (error) {
+        console.error('Error fetching transactions:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
 
 
     // Send a ping to confirm a successful connection
