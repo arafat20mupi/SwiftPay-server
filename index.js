@@ -213,9 +213,9 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
-    
+
     app.post('/api/cashOut', async (req, res) => {
-      const { agent, amount, pin ,userEmail } = req.body;
+      const { agent, amount, pin, userEmail } = req.body;
 
       console.log('User email:', userEmail);
       console.log('Agent:', agent);
@@ -230,10 +230,10 @@ async function run() {
           return res.status(404).json({ message: 'User or agent not found' });
         }
 
-          if (userAccount.password !== pin) { // Validate PIN
-            return res.status(403).json({ message: 'Invalid PIN' });
-          }
-  
+        if (userAccount.password !== pin) { // Validate PIN
+          return res.status(403).json({ message: 'Invalid PIN' });
+        }
+
 
         const amountNum = parseFloat(amount);
         const fee = amountNum * 0.015;
@@ -260,6 +260,31 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
+    app.get('/api/balance/:email', async (req, res) => {
+      const { email } = req.params;
+
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: 'Invalid email format' });
+      }
+
+      try {
+        // Find the user in the database
+        const userAccount = await userCollection.findOne({ email });
+
+        if (!userAccount) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.status(200).json({ balance: userAccount.balance });
+      } catch (error) {
+        console.error('Error fetching balance:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
