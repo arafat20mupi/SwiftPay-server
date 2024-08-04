@@ -34,6 +34,7 @@ const client = new MongoClient(uri, {
 const userCollection = client.db('SwiftPay').collection('user');
 const requestedCollection = client.db('SwiftPay').collection('requested');
 const transactionsCollection = client.db('SwiftPay').collection('transactions');
+const transactionsRequestedCollection = client.db('SwiftPay').collection('transactionsRequested');
 async function run() {
   try {
     // Connect the client to the server
@@ -208,11 +209,6 @@ async function run() {
     app.post('/api/cashOut', async (req, res) => {
       const { agent, amount, pin, userEmail } = req.body;
 
-      console.log('User email:', userEmail);
-      console.log('Agent:', agent);
-      console.log('Amount:', amount);
-      console.log('PIN:', pin);
-
       try {
         const userAccount = await userCollection.findOne({ email: userEmail });
         const agentAccount = await userCollection.findOne({ email: agent });
@@ -221,10 +217,11 @@ async function run() {
           return res.status(404).json({ message: 'User or agent not found' });
         }
 
-        if (userAccount.password !== pin) { // Validate PIN
+        // Compare hashed PIN
+        const isPinValid = await bcrypt.compare(pin, userAccount.password);
+        if (!isPinValid) {
           return res.status(403).json({ message: 'Invalid PIN' });
         }
-
 
         const amountNum = parseFloat(amount);
         const fee = amountNum * 0.015;
@@ -233,6 +230,7 @@ async function run() {
         if (userAccount.balance < totalDeducted) {
           return res.status(400).json({ message: 'Insufficient balance' });
         }
+
         // Log transaction
         const transaction = {
           email: userEmail,
@@ -246,7 +244,6 @@ async function run() {
 
         await transactionsCollection.insertOne(transaction);
 
-
         // Update balances
         await userCollection.updateOne(
           { email: userEmail },
@@ -258,12 +255,24 @@ async function run() {
           { $inc: { balance: amountNum + fee } }
         );
 
+        // Create cash-out request
+        const request = {
+          userEmail,
+          agentEmail: agent,
+          amount,
+          status: 'pending',
+        };
+
+        await requestedCollection.insertOne(request);
+
         res.status(200).json({ message: 'Cash out successful' });
       } catch (error) {
         console.error('Error cashing out:', error);
         res.status(500).json({ message: 'Internal server error' });
       }
     });
+
+
     app.get('/api/balance/:email', async (req, res) => {
       const { email } = req.params;
 
@@ -336,8 +345,6 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
-
-    // Endpoint for agents to approve cash-in requests
     app.put('/api/approveCashIn/:id', async (req, res) => {
       const requestId = req.params.id;
       const { agentEmail } = req.body;
@@ -395,7 +402,10 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
-    // Backend: Fetch last 10 transactions for a user
+    
+    
+
+    // Backend: Fetch last 20 transactions for an agent
     app.get('/api/transactions/:email', async (req, res) => {
       const { email } = req.params;
 
@@ -406,8 +416,20 @@ async function run() {
       }
 
       try {
-        // Find the last 10 transactions for the user
-        const transactions = await transactionsCollection.find({ email }).sort({ date: -1 }).limit(10).toArray();
+        // Determine if the user is an agent by checking their role
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+
+        const isAgent = user.role === 'agent';
+
+        // Fetch transactions based on role
+        const transactions = await transactionsCollection
+          .find({ email })
+          .sort({ date: -1 })
+          .limit(isAgent ? 20 : 10) // Fetch last 20 transactions for agents, 10 for other users
+          .toArray();
 
         res.status(200).json(transactions);
       } catch (error) {
@@ -415,7 +437,6 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
-
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
