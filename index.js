@@ -12,8 +12,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 app.use(cookieParser());
 app.use(cors({
-  origin: "http://localhost:5173",
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  origin: [
+    "http://localhost:5173",
+    "https://swiftpay-6ecef.web.app",
+    "http://localhost:5174",
+    "https://swiftpay-6ecef.firebaseapp.com"
+  ],
   credentials: true,
 }));
 
@@ -28,7 +32,7 @@ const client = new MongoClient(uri, {
     strict: true,
     deprecationErrors: true,
   }
-}); 
+});
 
 const userCollection = client.db('SwiftPay').collection('user');
 const requestedCollection = client.db('SwiftPay').collection('requested');
@@ -396,8 +400,8 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
-    
-    
+
+
 
     // Backend: Fetch last 20 transactions for an agent
     app.get('/api/transactions/:email', async (req, res) => {
@@ -436,7 +440,7 @@ async function run() {
     // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
 
-   
+
 
   } catch (error) {
     console.error(error);
@@ -448,7 +452,7 @@ run().catch(console.dir);
 app.get('/', (req, res) => {
   res.send('server is running');
 });
- // Start the server
- app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-  });
+// Start the server
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
