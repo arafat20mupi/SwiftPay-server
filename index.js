@@ -40,7 +40,7 @@ const transactionsCollection = client.db('SwiftPay').collection('transactions');
 async function run() {
   try {
     // Connect the client to the server
-    await client.connect();
+    // await client.connect();
 
     app.get('/user', async (req, res) => {
       const cursor = userCollection.find();
